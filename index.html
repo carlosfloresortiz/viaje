@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Para estar contigo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Pacifico&family=Quicksand:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --cursor-color: #ff85a2; /* Rosa */
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            background: #fafafa;
+            font-family: 'Quicksand', sans-serif;
+            overflow: hidden;
+            cursor: none; /* Ocultamos cursor nativo */
+            user-select: none;
+        }
+
+        /* --- Cursor Personalizado --- */
+        #custom-cursor {
+            width: 20px;
+            height: 20px;
+            background: var(--cursor-color);
+            border-radius: 50%;
+            position: fixed;
+            pointer-events: none; /* El click pasa a través de él */
+            z-index: 9999;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 10px rgba(255, 133, 162, 0.5);
+            transition: transform 0.1s ease;
+        }
+
+        /* --- Animación Pop-Up --- */
+        @keyframes popIn {
+            0% { transform: scale(0) rotate(0deg); opacity: 0; }
+            70% { transform: scale(1.1) rotate(var(--rot)); opacity: 1; }
+            100% { transform: scale(1) rotate(var(--rot)); }
+        }
+
+        /* --- Estilos de la Nota --- */
+        .sticky-note {
+            position: absolute;
+            width: 220px;
+            min-height: 150px;
+            padding: 15px;
+            box-shadow: 2px 5px 15px rgba(0,0,0,0.15);
+            border-radius: 2px;
+            display: flex;
+            flex-direction: column;
+            z-index: 10;
+            /* La animación usa la variable --rot que asignamos en JS */
+            animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+            transform-origin: center center;
+        }
+
+        .sticky-note:hover {
+            z-index: 50;
+        }
+
+        .note-content {
+            flex-grow: 1;
+            outline: none;
+            font-size: 15px;
+            font-weight: 500;
+            line-height: 1.4;
+            color: #333;
+            overflow-y: auto;
+            max-height: 300px;
+            cursor: text; 
+            white-space: pre-wrap;
+        }
+
+        /* Truco CSS para el placeholder en div contenteditable */
+        .note-content:empty:before {
+            content: attr(placeholder);
+            color: rgba(0,0,0,0.4);
+            font-style: italic;
+            pointer-events: none;
+            display: block; /* Para que aparezca */
+        }
+
+        .note-content img {
+            max-width: 100%;
+            height: auto;
+            margin-top: 10px;
+            border-radius: 4px;
+            pointer-events: none;
+        }
+
+        .note-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 10px;
+            padding-top: 5px;
+            border-top: 1px solid rgba(0,0,0,0.05);
+        }
+
+        .action-btn {
+            border: none;
+            padding: 5px 12px;
+            font-size: 12px;
+            font-weight: 700;
+            border-radius: 20px;
+            cursor: none; /* Mantenemos cursor personalizado */
+            transition: transform 0.1s;
+        }
+        
+        .action-btn:active { transform: scale(0.95); }
+
+        .btn-save { background: #333; color: white; }
+        .btn-discard { background: transparent; color: #555; border: 1px solid #ccc; }
+        .btn-delete { background: #ff4d4d; color: white; font-size: 11px;}
+
+        /* --- Encabezado --- */
+        .countdown-header {
+            position: absolute;
+            top: 5%; /* Arriba */
+            left: 0; 
+            right: 0;
+            text-align: center;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        .timer-val {
+            font-family: 'Pacifico', cursive;
+            color: #ff85a2;
+            font-size: 2rem;
+            margin: 0 4px;
+        }
+
+        .timer-unit {
+            font-size: 0.9rem;
+            color: #888;
+            font-weight: 600;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="custom-cursor"></div>
+
+    <header class="countdown-header">
+        <h1 class="text-2xl font-bold text-gray-700 tracking-wide uppercase mb-2">Falta</h1>
+        <div id="timer" class="flex justify-center items-baseline"></div>
+        <h1 class="text-2xl font-bold text-gray-700 tracking-wide uppercase mt-2">para estar contigo</h1>
+    </header>
+
+    <div id="canvas" class="w-full h-full relative"></div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        // -----------------------------------------------------------
+        // ⚠️ TUS CLAVES DE FIREBASE (NO TOCADAS)
+        // -----------------------------------------------------------
+        const firebaseConfig = {
+            apiKey: "TU_API_KEY",
+            authDomain: "TU_PROYECTO.firebaseapp.com",
+            projectId: "TU_PROYECTO_ID",
+            storageBucket: "TU_PROYECTO.appspot.com",
+            messagingSenderId: "NUMEROS",
+            appId: "NUMEROS_Y_LETRAS"
+        };
+        // -----------------------------------------------------------
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const notesCollection = collection(db, "notas");
+
+        // --- Estado ---
+        let isCreating = false;
+        const colors = ['#ffe4e1', '#e0f7fa', '#f3e5f5', '#fff9c4', '#e8f5e9', '#fff3e0'];
+        const canvas = document.getElementById('canvas');
+        const cursor = document.getElementById('custom-cursor');
+
+        // --- Cursor ---
+        document.addEventListener('mousemove', (e) => {
+            cursor.style.left = e.clientX + 'px';
+            cursor.style.top = e.clientY + 'px';
+        });
+
+        // Efecto hover del cursor
+        document.addEventListener('mouseover', (e) => {
+            const tag = e.target.tagName;
+            if (tag === 'BUTTON' || e.target.closest('.sticky-note')) {
+                cursor.style.transform = 'translate(-50%, -50%) scale(1.5)';
+                cursor.style.opacity = '0.5';
+            } else {
+                cursor.style.transform = 'translate(-50%, -50%) scale(1)';
+                cursor.style.opacity = '1';
+            }
+        });
+
+        // --- Contador ---
+        const targetDate = new Date('2026-01-13T08:00:00'); 
+        function updateTimer() {
+            const now = new Date();
+            const diff = targetDate - now;
+            if (diff <= 0) {
+                document.getElementById('timer').innerHTML = "<span class='timer-val'>¡Llegó el día!</span>";
+                return;
+            }
+            const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+            const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
+            const minutes = Math.floor((diff / 1000 / 60) % 60);
+
+            document.getElementById('timer').innerHTML = `
+                <span class="timer-val">${days}</span><span class="timer-unit">días</span>
+                <span class="timer-val">${hours}</span><span class="timer-unit">hrs</span>
+                <span class="timer-val">${minutes}</span><span class="timer-unit">min</span>
+            `;
+        }
+        setInterval(updateTimer, 60000);
+        updateTimer();
+
+
+        // --- CREAR NOTA (Click en Canvas) ---
+        canvas.addEventListener('click', (e) => {
+            // Ignorar si clicamos sobre una nota, un botón o ya estamos creando
+            if (isCreating || e.target.closest('.sticky-note') || e.target.closest('.action-btn')) return;
+            
+            createDraftNote(e.clientX, e.clientY);
+        });
+
+        function createDraftNote(x, y) {
+            isCreating = true;
+            
+            // Límites para que no se salga de pantalla
+            const finalX = Math.min(Math.max(x, 20), window.innerWidth - 240);
+            const finalY = Math.min(Math.max(y, 20), window.innerHeight - 200);
+
+            const color = colors[Math.floor(Math.random() * colors.length)];
+            const rotation = Math.floor(Math.random() * 20) - 10; 
+
+            const note = document.createElement('div');
+            note.className = 'sticky-note';
+            note.style.left = `${finalX}px`;
+            note.style.top = `${finalY}px`;
+            note.style.backgroundColor = color;
+            // Pasamos la rotación a la variable CSS para que la animación la use
+            note.style.setProperty('--rot', `${rotation}deg`);
+
+            note.innerHTML = `
+                <div class="note-content" contenteditable="true" placeholder="Escribe algo bonito..."></div>
+                <div class="note-actions">
+                    <button class="action-btn btn-discard">✕</button>
+                    <button class="action-btn btn-save">Guardar</button>
+                </div>
+            `;
+
+            canvas.appendChild(note);
+
+            const contentDiv = note.querySelector('.note-content');
+            contentDiv.focus();
+
+            // Pegar Imágenes
+            contentDiv.addEventListener('paste', (ev) => {
+                const items = (ev.clipboardData || ev.originalEvent.clipboardData).items;
+                for (let index in items) {
+                    const item = items[index];
+                    if (item.kind === 'file') {
+                        const blob = item.getAsFile();
+                        const reader = new FileReader();
+                        reader.onload = (event) => {
+                            const img = document.createElement('img');
+                            img.src = event.target.result;
+                            contentDiv.appendChild(img);
+                        };
+                        reader.readAsDataURL(blob);
+                    }
+                }
+            });
+
+            // Botón Descartar
+            note.querySelector('.btn-discard').onclick = (ev) => {
+                ev.stopPropagation();
+                note.remove();
+                isCreating = false;
+            };
+
+            // Botón Guardar
+            note.querySelector('.btn-save').onclick = async (ev) => {
+                ev.stopPropagation();
+                const htmlContent = contentDiv.innerHTML;
+                
+                if (!htmlContent.trim() && !htmlContent.includes('<img')) {
+                    note.remove(); 
+                    isCreating = false;
+                    return;
+                }
+
+                try {
+                    await addDoc(notesCollection, {
+                        content: htmlContent,
+                        x: finalX,
+                        y: finalY,
+                        color: color,
+                        rotation: rotation,
+                        timestamp: new Date()
+                    });
+                    note.remove(); // Se borra el borrador, Firebase pintará la real
+                    isCreating = false;
+                } catch (error) {
+                    console.error("Error guardando:", error);
+                    alert("Error al guardar");
+                }
+            };
+        }
+
+        // --- LEER NOTAS ---
+        onSnapshot(notesCollection, (snapshot) => {
+            // Limpiamos solo las notas guardadas (las que no tienen botón save)
+            // Usamos una clase auxiliar o lógica de selectores para no borrar el borrador actual
+            const existingNotes = document.querySelectorAll('.sticky-note');
+            existingNotes.forEach(el => {
+                if (!el.querySelector('.btn-save')) { 
+                    el.remove();
+                }
+            });
+
+            snapshot.forEach((docSnap) => {
+                renderSavedNote(docSnap.id, docSnap.data());
+            });
+        });
+
+        function renderSavedNote(id, data) {
+            const note = document.createElement('div');
+            note.className = 'sticky-note';
+            note.style.left = `${data.x}px`;
+            note.style.top = `${data.y}px`;
+            note.style.backgroundColor = data.color;
+            // Aquí seteamos la rotación fija porque ya no hay animación de entrada en notas viejas
+            // O podemos dejar la animación si queremos que "aparezcan" al cargar
+            note.style.setProperty('--rot', `${data.rotation}deg`);
+            
+            note.innerHTML = `
+                <div class="note-content" contenteditable="false">${data.content}</div>
+                <div class="note-actions" style="display:none;">
+                    <button class="action-btn btn-delete">Borrar</button>
+                </div>
+            `;
+
+            // Click en nota guardada: mostrar borrar
+            note.onclick = (e) => {
+                e.stopPropagation();
+                const actions = note.querySelector('.note-actions');
+                // Ocultar otros
+                document.querySelectorAll('.note-actions').forEach(el => {
+                    if(el !== actions) el.style.display = 'none';
+                });
+                // Toggle
+                actions.style.display = (actions.style.display === 'none') ? 'flex' : 'none';
+            };
+
+            note.querySelector('.btn-delete').onclick = async (e) => {
+                e.stopPropagation();
+                if (confirm('¿Borrar nota?')) {
+                    await deleteDoc(doc(db, "notas", id));
+                }
+            };
+
+            canvas.appendChild(note);
+        }
+
+    </script>
+</body>
+</html>
